@@ -76,60 +76,72 @@ def handle_drive(message):
     bot.send_message(message.chat.id, "اختر الملف", reply_markup=menu)
 
 
-@bot.message_handler(commands=['source'])
-def source_text_end(message):
-    bot.send_message(message.chat.id, "الكود OpenSource تكدر تشارك ببناءه")
-    bot.send_message(message.chat.id, "github.com/ItsFROSKY/UOTCE_Bot/")
-
 @bot.message_handler(commands=['tasks'])
 def notion_screenshot(message):
-    bot.send_message(message.chat.id, 'جاري  إرسال الصورة🖼️')
+    bot.send_message(message.chat.id, 'جاري إرسال الصورة🖼️')
     bot.send_chat_action(message.chat.id, 'upload_photo')
-    target_url = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774cae&source=copy_link"
-    encoded_url = urllib.parse.quote_plus(target_url)
+
+    target_url = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca&source=copy_link"
+
+    def send_image(img):
     
-    params = (
-        f"url={encoded_url}"
-        "&screenshot=true"
-        "&meta=false"
-        "&embed=screenshot.url"
-        "&viewport.width=1600"
-        "&viewport.height=1600"
-        "&viewport.deviceScaleFactor=1"
-        "&screenshot.type=jpeg"
-        "&colorScheme=dark"
-        "&waitFor=9000"
-    )
-    
-    screenshot_api_url = f"https://api.microlink.io/?{params}"
+        logging.info(f"Image received from API: {img.size}")
+
+        output = io.BytesIO()
+        img.save(output, format="PNG")
+        output.seek(0)
+        output.name = "tasks.png"
+
+        bot.send_photo(message.chat.id, output, caption="RAW IMAGE")
+    try:
+        logging.info("Trying Thum.io")
+
+        thum_url = (
+            "https://image.thum.io/get/"
+            "crop/1200/"
+            "maxAge/0/"
+            "png/"
+            "?url=" + urllib.parse.quote(target_url, safe="")
+                )
+
+        r = requests.get(thum_url, timeout=40)
+        logging.info(f"Thum.io: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
+        r.raise_for_status()
+
+        if not r.headers.get("content-type", "").startswith("image/"):
+            raise Exception("Thum.io did not return an image")
+
+        send_image(Image.open(io.BytesIO(r.content)))
+        logging.info("Thum.io succeeded")
+        return
+
+    except Exception as e:
+        logging.exception(f"Thum.io failed: {e}")
+        logging.exception(f"Thum.io response: {r.text[:500] if 'r' in locals() else 'no response'}")
 
     try:
-        img_response = requests.get(screenshot_api_url, timeout=30)
-        
-        if img_response.status_code == 200:
-            img = Image.open(io.BytesIO(img_response.content))
-            width, height = img.size
-            left = 50
-            top = 180
-            crop_width = 800
-            crop_height = 700
+        logging.info("Trying Microlink")
+        params = (
+            f"url={urllib.parse.quote_plus(target_url)}"
+            "&screenshot=true&meta=false"
+            "&viewport.width=1600&viewport.height=1600"
+            "&viewport.deviceScaleFactor=1"
+            "&screenshot.type=jpeg&colorScheme=dark&waitFor=15000"
+        )
 
-            #safety clamps
-            right = min(left + crop_width, width)
-            bottom = min(top + crop_height, height)
+        r = requests.get(f"https://api.microlink.io/?{params}", timeout=40)
+        logging.info(f"Microlink: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
+        r.raise_for_status()
 
-            crop_box = (left, top, right, bottom)
-            cropped_img = img.crop(crop_box)
+        screenshot_url = r.json()["data"]["screenshot"]["url"]
+        r = requests.get(screenshot_url, timeout=40)
+        logging.info(f"Microlink image: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
+        r.raise_for_status()
 
-            output_bytes = io.BytesIO()
-            cropped_img.save(output_bytes, format='JPEG', quality=85)
-            output_bytes.seek(0)
-            output_bytes.name = "tasks.jpg"
-            
-            bot.send_photo(message.chat.id, photo=output_bytes, caption="Uni Tasks📋", reply_to_message_id=message.message_id)
-        else:
-            bot.reply_to(message, "Failed to generate tasks snapshot.")
-            
+        send_image(Image.open(io.BytesIO(r.content)))
+        logging.info("Microlink succeeded")
+
     except Exception as e:
-        logging.error(f"error fetching task screenshot: {e}")
-        bot.reply_to(message, "error loading snapshot")
+        logging.exception(f"Microlink failed: {e}")
+        logging.exception(f"Microlink response: {r.text[:500] if 'r' in locals() else 'no response'}")
+        bot.reply_to(message, f"❌ error: {type(e).__name__}: {e}")

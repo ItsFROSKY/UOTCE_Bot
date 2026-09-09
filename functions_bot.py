@@ -60,5 +60,3 @@ def Google_menu(Folder_ID, bot, drive_service):
             inline_keyboard_menu.add(button)
         
     return inline_keyboard_menu
-
-    

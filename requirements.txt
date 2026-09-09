@@ -4,3 +4,5 @@ uvicorn
 google-api-python-client
 google-auth
 python-dotenv
+requests
+Pillow

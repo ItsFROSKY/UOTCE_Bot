@@ -62,7 +62,7 @@ def handle_drive_click(call):
         bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=new_menu)
 
     elif action == "file":
-        bot.send_message(call.message.chat.id, "📥 Downloading file, please wait...")
+        bot.send_message(call.message.chat.id, "....📥جار التحميل")
         download_and_send_file(target_id, Drive_service, bot, call.message.chat.id)
 
 
@@ -70,7 +70,7 @@ def handle_drive_click(call):
 def handle_drive(message):
     bot.send_message(message.chat.id, "loading")
     menu = Google_menu(Drive_ID, bot, Drive_service)
-    bot.send_message(message.chat.id, "choose file", reply_markup=menu)
+    bot.send_message(message.chat.id, "اختر الملف", reply_markup=menu)
 
 
 @bot.message_handler(commands=['source'])

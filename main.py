@@ -71,3 +71,9 @@ def handle_drive(message):
     bot.send_message(message.chat.id, "loading")
     menu = Google_menu(Drive_ID, bot, Drive_service)
     bot.send_message(message.chat.id, "choose file", reply_markup=menu)
+
+
+@bot.message_handler(commands=['source'])
+def source_text_end(message):
+    bot.send_message(message.chat.id, "الكود OpenSource تكدر تشارك ببناءه")
+    bot.send_message(message.chat.id, "github.com/ItsFROSKY/UOTCE_Bot/")

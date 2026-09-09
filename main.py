@@ -78,7 +78,7 @@ def handle_drive(message):
 
 @bot.message_handler(commands=['tasks'])
 def notion_screenshot(message):
-    bot.send_message(message.chat.id, 'جاري إرسال الصورة🖼️')
+    bot.send_message(message.chat.id, 'جاري إرسال الصورةufreburbr🖼️')
     bot.send_chat_action(message.chat.id, 'upload_photo')
 
     target_url = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca&source=copy_link"
@@ -102,7 +102,7 @@ def notion_screenshot(message):
             "maxAge/0/"
             "png/"
             "?url=" + urllib.parse.quote(target_url, safe="")
-                )
+            )
 
         r = requests.get(thum_url, timeout=40)
         logging.info(f"Thum.io: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")

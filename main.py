@@ -4,21 +4,28 @@ from fastapi import FastAPI, Request
 from telebot import TeleBot, types
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
 import urllib.parse
 import requests
+import json
+import base64
+from google.oauth2.service_account import Credentials
 from PIL import Image
 from bot_texts import*
 from functions_bot import*
 
 
-load_dotenv()
+load_dotenv(override=True)
 
-#initialize the Drive
-Drive_api = os.environ.get("Google_Drive_API")
+
+Google_Credentials_bot = json.loads(
+    base64.b64decode(os.environ["Google_Credentials_bot"]).decode()
+)
 Drive_ID = os.environ.get("Drive_ID")
-Drive_service = build('drive', 'v3', developerKey=Drive_api)
+creds = Credentials.from_service_account_info(Google_Credentials_bot, scopes=["https://www.googleapis.com/auth/drive"])
+Drive_service = build("drive", "v3", credentials=creds)
+tasks_cache_File_ID = os.environ["tasks_cache_File_ID"]
 
 #logging to see errors in vercel logs
 logging.basicConfig(level=logging.INFO)
@@ -75,73 +82,78 @@ def handle_drive(message):
     menu = Google_menu(Drive_ID, bot, Drive_service)
     bot.send_message(message.chat.id, "اختر الملف", reply_markup=menu)
 
+@bot.message_handler(commands=['source'])
+def source_text_end(message):
+    bot.send_message(message.chat.id, "الكود OpenSource تكدر تشارك ببناءه")
+    bot.send_message(message.chat.id, "github.com/ItsFROSKY/UOTCE_Bot/")
 
-@bot.message_handler(commands=['tasks'])
-def notion_screenshot(message):
-    bot.send_message(message.chat.id, 'جاري إرسال الصورةufreburbr🖼️')
-    bot.send_chat_action(message.chat.id, 'upload_photo')
 
-    target_url = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca&source=copy_link"
+TASKS_CACHE = "tasks_cache.png"
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+TARGET_URL = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca&source=copy_link"
 
-    def send_image(img):
-    
-        logging.info(f"Image received from API: {img.size}")
+@bot.message_handler(commands=["tasks"])
+def tasks(message):
+    try:
+        request = Drive_service.files().get_media(fileId=tasks_cache_File_ID)
+        output = io.BytesIO()
+        downloader = MediaIoBaseDownload(output, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        output.seek(0)
+        img = Image.open(output)
+        left, top, right, bottom = 0, 170, 2960, 2000
+        w, h = img.size
+        img = img.crop((left, top, w - right, h - bottom))
 
         output = io.BytesIO()
         img.save(output, format="PNG")
         output.seek(0)
         output.name = "tasks.png"
 
-        bot.send_photo(message.chat.id, output, caption="RAW IMAGE")
-    try:
-        logging.info("Trying Thum.io")
-
-        thum_url = (
-            "https://image.thum.io/get/"
-            "crop/1200/"
-            "maxAge/0/"
-            "png/"
-            "?url=" + urllib.parse.quote(target_url, safe="")
-            )
-
-        r = requests.get(thum_url, timeout=40)
-        logging.info(f"Thum.io: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
-        r.raise_for_status()
-
-        if not r.headers.get("content-type", "").startswith("image/"):
-            raise Exception("Thum.io did not return an image")
-
-        send_image(Image.open(io.BytesIO(r.content)))
-        logging.info("Thum.io succeeded")
-        return
-
+        bot.send_photo(message.chat.id, output)
     except Exception as e:
-        logging.exception(f"Thum.io failed: {e}")
-        logging.exception(f"Thum.io response: {r.text[:500] if 'r' in locals() else 'no response'}")
+        logging.exception("tasks failed")
+        bot.reply_to(message, f"❌ {type(e).__name__}: {e}")
+
+
+@bot.message_handler(commands=["tasks_update"])
+def tasks_update(message):
+    if message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❌ Not authorized")
 
     try:
-        logging.info("Trying Microlink")
+        bot.send_message(message.chat.id, "🔄 Updating...")
+
         params = (
-            f"url={urllib.parse.quote_plus(target_url)}"
+            f"url={urllib.parse.quote_plus(TARGET_URL)}"
             "&screenshot=true&meta=false"
-            "&viewport.width=1600&viewport.height=1600"
-            "&viewport.deviceScaleFactor=1"
-            "&screenshot.type=jpeg&colorScheme=dark&waitFor=15000"
+            "&viewport.width=2000&viewport.height=1600"
+            "&viewport.deviceScaleFactor=2"
+            "&screenshot.type=png&colorScheme=dark&waitFor=15000"
         )
 
         r = requests.get(f"https://api.microlink.io/?{params}", timeout=40)
-        logging.info(f"Microlink: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
         r.raise_for_status()
 
-        screenshot_url = r.json()["data"]["screenshot"]["url"]
-        r = requests.get(screenshot_url, timeout=40)
-        logging.info(f"Microlink image: {r.status_code} {r.headers.get('content-type')} {len(r.content)} bytes")
+        url = r.json()["data"]["screenshot"]["url"]
+        r = requests.get(url, timeout=40)
         r.raise_for_status()
 
-        send_image(Image.open(io.BytesIO(r.content)))
-        logging.info("Microlink succeeded")
+        media = MediaIoBaseUpload(io.BytesIO(r.content), mimetype="image/png",resumable=False)
+        Drive_service.files().update(fileId=tasks_cache_File_ID,media_body=media).execute()
+        bot.send_photo(message.chat.id,io.BytesIO(r.content),caption="✅ Updated")
+
+
 
     except Exception as e:
-        logging.exception(f"Microlink failed: {e}")
-        logging.exception(f"Microlink response: {r.text[:500] if 'r' in locals() else 'no response'}")
-        bot.reply_to(message, f"❌ error: {type(e).__name__}: {e}")
+        logging.exception("tasks_update failed")
+        bot.reply_to(message, f"❌ {type(e).__name__}: {e}")
+
+
+@bot.message_handler(commands=["id"])
+def get_id(message):
+    bot.reply_to(message, str(message.from_user.id))

@@ -37,7 +37,7 @@ def Google_menu(Folder_ID, bot, drive_service):
     items = response.get('files', [])
     FOLDER_MIME_TYPE = "application/vnd.google-apps.folder" #this way yk if its a folder or file
     SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
-    inline_keyboard_menu = InlineKeyboardMarkup(row_width = 5)
+    inline_keyboard_menu = InlineKeyboardMarkup(row_width = 1000)
     for item in items:
         file_name = item['name']
         file_id = item['id']

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
+import time
 import urllib.parse
 import requests
 import json
@@ -60,7 +61,7 @@ async def webhook_handler(request: Request):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "I am live")
+    bot.send_message(message.chat.id, "i am alive")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_drive_click(call):
@@ -88,72 +89,65 @@ def source_text_end(message):
     bot.send_message(message.chat.id, "github.com/ItsFROSKY/UOTCE_Bot/")
 
 
-TASKS_CACHE = "tasks_cache.png"
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-TARGET_URL = "https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca&source=copy_link"
-
+ADMIN_ID=int(os.getenv("ADMIN_ID","0"))
+TARGET_URL="https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca"
+TASKS_FILE="tasks_file_id.txt"
 @bot.message_handler(commands=["tasks"])
 def tasks(message):
     try:
-        request = Drive_service.files().get_media(fileId=tasks_cache_File_ID)
-        output = io.BytesIO()
-        downloader = MediaIoBaseDownload(output, request)
-
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-
-        output.seek(0)
-        img = Image.open(output)
-        left, top, right, bottom = 0, 170, 2960, 2000
-        w, h = img.size
-        img = img.crop((left, top, w - right, h - bottom))
-
-        output = io.BytesIO()
-        img.save(output, format="PNG")
-        output.seek(0)
-        output.name = "tasks.png"
-
-        bot.send_photo(message.chat.id, output)
+        if not os.path.exists(TASKS_FILE):
+            return bot.reply_to(message,"أستخدم /Tasks_update أولاً❌ ")
+        with open(TASKS_FILE,"r") as f:
+            file_id=f.read().strip()
+        if not file_id:
+            return bot.reply_to(message,"أستخدم /Tasks_update أولاً❌ ")
+        bot.send_photo(message.chat.id,file_id)
     except Exception as e:
         logging.exception("tasks failed")
-        bot.reply_to(message, f"❌ {type(e).__name__}: {e}")
+        bot.reply_to(message,f"❌ {type(e).__name__}: {e}")
+
+
 
 
 @bot.message_handler(commands=["tasks_update"])
 def tasks_update(message):
-    if message.from_user.id != ADMIN_ID:
-        return bot.reply_to(message, "❌ Not authorized")
-
+    bot.send_message(message.chat.id,"🔄 Updating...")
+    if message.from_user.id!=ADMIN_ID:
+        return bot.reply_to(message,"❌ ما عندك صلاحية")
     try:
-        bot.send_message(message.chat.id, "🔄 Updating...")
-
-        params = (
-            f"url={urllib.parse.quote_plus(TARGET_URL)}"
-            "&screenshot=true&meta=false"
-            "&viewport.width=2000&viewport.height=1600"
-            "&viewport.deviceScaleFactor=2"
-            "&screenshot.type=png&colorScheme=dark&waitFor=15000"
-        )
-
-        r = requests.get(f"https://api.microlink.io/?{params}", timeout=40)
-        r.raise_for_status()
-
-        url = r.json()["data"]["screenshot"]["url"]
-        r = requests.get(url, timeout=40)
-        r.raise_for_status()
-
-        media = MediaIoBaseUpload(io.BytesIO(r.content), mimetype="image/png",resumable=False)
+        token=os.getenv("BROWSERLESS_TOKEN")
+        if not token:
+            raise RuntimeError("BROWSERLESS_TOKEN is missing")
+        #the browserless settings
+        code=f"""
+        export default async ({{page}})=>{{
+        await page.setViewport({{width:2000,height:1600,deviceScaleFactor:2}});
+        await page.emulateMediaFeatures([{{name:"prefers-color-scheme",value:"dark"}}]);
+        await page.goto({json.dumps(TARGET_URL.split("?")[0])},{{waitUntil:"networkidle2",timeout:30000}});
+        await new Promise(r=>setTimeout(r,10000));
+        if(document.fonts)await document.fonts.ready;
+        await new Promise(r=>setTimeout(r,1000));
+        return await page.screenshot({{type:"png",fullPage:false}});
+        }};"""
+        r=requests.post("https://production-sfo.browserless.io/function",params={"token":token},headers={"Content-Type":"application/javascript"},data=code,timeout=60)
+        if not r.ok:
+            raise RuntimeError(f"Browserless {r.status_code}: {r.text}")
+        image_bytes=r.content
+        img=Image.open(io.BytesIO(image_bytes))
+        left,top,right,bottom=150,150,2842,2150
+        width,height=img.size
+        img=img.crop((left,top,width-right,height-bottom))
+        output=io.BytesIO()
+        img.save(output,format="PNG")
+        output.seek(0)
+        image_bytes=output.getvalue()
+        media=MediaIoBaseUpload(io.BytesIO(image_bytes),mimetype="image/png",resumable=False)
         Drive_service.files().update(fileId=tasks_cache_File_ID,media_body=media).execute()
-        bot.send_photo(message.chat.id,io.BytesIO(r.content),caption="✅ Updated")
-
-
-
+        sent=bot.send_photo(message.chat.id,io.BytesIO(image_bytes),caption="✅ Updated")
+        if not sent or not sent.photo:
+            raise RuntimeError("Telegram did not return a photo message")
+        with open(TASKS_FILE,"w") as f:
+            f.write(sent.photo[-1].file_id)
     except Exception as e:
         logging.exception("tasks_update failed")
-        bot.reply_to(message, f"❌ {type(e).__name__}: {e}")
-
-
-@bot.message_handler(commands=["id"])
-def get_id(message):
-    bot.reply_to(message, str(message.from_user.id))
+        bot.reply_to(message,f"❌ {type(e).__name__}: {e}")

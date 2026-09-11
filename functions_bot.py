@@ -2,6 +2,7 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from googleapiclient.http import MediaIoBaseDownload
 import json
 import io
+import time
 from config import*
 from bot_texts import*
 
@@ -78,13 +79,13 @@ def Google_menu(Folder_ID, bot, drive_service):
 
 
 def load_state():
-    raw_data = redis.get(Drive_ID_course)
+    raw_data = redis.get(REDIS_KEY_DRIVE)
     if raw_data:
         return json.loads(raw_data)
     return {"page_token": None, "topic_map": {}}
 
 def save_state(state):
-    redis.set(Drive_ID_course, json.dumps(state))
+    redis.set(REDIS_KEY_DRIVE, json.dumps(state))
 
 LIMIT_50MB = 52428800
 
@@ -116,11 +117,10 @@ def send_to_telegram(folder_ID, topic_id, message):
             continue
 
         if mime_type.startswith("application/vnd.google-apps."):
-            print(f"تم تخطي ملف قوقل: {file_name}")
             continue
         else:
             download_and_send_file(file_id, telegram_ID_course, message, message_thread_id = topic_id)
-
+            time.sleep(1.2)
 
 def create_topic(state, message):
     bot.send_message(message.chat.id,"🔄creating new topics...")
@@ -132,6 +132,7 @@ def create_topic(state, message):
         subfolder_id = subfolder["id"]
         if subfolder_id not in state["topic_map"]:
             bot.send_message(message.chat.id, f"new subfolder found, creating {subfolder_name} topic...")
+            time.sleep(1.2)
             new_topic = bot.create_forum_topic(chat_id=telegram_ID_course, name=subfolder_name)
             state["topic_map"][subfolder_id] = new_topic.message_thread_id #satore the ID in topic_map
             
@@ -140,6 +141,7 @@ def create_topic(state, message):
             
         topic_id = state["topic_map"][subfolder_id]
         bot.send_message(message.chat.id,f"جار إرسال جميع ملفات {subfolder_name}⏬...")
+        time.sleep(1.2)
         send_to_telegram(subfolder_id,topic_id, message)
         
         

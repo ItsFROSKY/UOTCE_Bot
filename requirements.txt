@@ -6,3 +6,4 @@ google-auth
 python-dotenv
 requests
 Pillow
+upstash-redis

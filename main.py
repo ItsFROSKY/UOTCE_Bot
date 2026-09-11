@@ -1,41 +1,24 @@
-import os
-import logging
-from fastapi import FastAPI, Request
-from telebot import TeleBot, types
-from dotenv import load_dotenv
-from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
 import time
 import urllib.parse
 import requests
 import json
-import base64
-from google.oauth2.service_account import Credentials
+import logging
+from upstash_redis import Redis
 from PIL import Image
+from config import*
 from bot_texts import*
 from functions_bot import*
 
 
-load_dotenv(override=True)
 
 
-Google_Credentials_bot = json.loads(
-    base64.b64decode(os.environ["Google_Credentials_bot"]).decode()
-)
-Drive_ID = os.environ.get("Drive_ID")
-creds = Credentials.from_service_account_info(Google_Credentials_bot, scopes=["https://www.googleapis.com/auth/drive"])
-Drive_service = build("drive", "v3", credentials=creds)
-tasks_cache_File_ID = os.environ["tasks_cache_File_ID"]
+
+
 
 #logging to see errors in vercel logs
 logging.basicConfig(level=logging.INFO)
-
-TOKEN = os.environ.get("BOT_TOKEN") or "" #the or exists to avoid none returns that will crash runtime for bot
-if not TOKEN:
-    logging.error("BOT_TOKEN environment variable is missing")
-
-bot = TeleBot(TOKEN, threaded=False)
 app = FastAPI()
 
 @app.get("/")
@@ -43,14 +26,14 @@ def home():
     return {"status": "online", "message": "bot is running on vercel"}
 
 @app.post("/webhook")
-async def webhook_handler(request: Request):
+async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
     try:
         json_data = await request.json()
         update = types.Update.de_json(json_data)
 
-        #Check if update parsed successfully, safety measures
         if update is not None:
-            bot.process_new_updates([update])
+            #offload processing so tele gets an instant 200 OK
+            background_tasks.add_task(bot.process_new_updates, [update])
             
         return {"status": "ok"}
     except Exception as e:
@@ -74,7 +57,7 @@ def handle_drive_click(call):
 
     elif action == "file":
         bot.send_message(call.message.chat.id, "....📥جار التحميل")
-        download_and_send_file(target_id, Drive_service, bot, call.message.chat.id)
+        download_and_send_file(target_id, call.message.chat.id, call)
 
 
 @bot.message_handler(commands=['drive'])
@@ -142,7 +125,7 @@ def tasks_update(message):
         output.seek(0)
         image_bytes=output.getvalue()
         media=MediaIoBaseUpload(io.BytesIO(image_bytes),mimetype="image/png",resumable=False)
-        Drive_service.files().update(fileId=tasks_cache_File_ID,media_body=media).execute()
+        Drive_service.files().update(fileId=tasks_cache_File_ID,media_body=media).execute() # type: ignore
         sent=bot.send_photo(message.chat.id,io.BytesIO(image_bytes),caption="✅ Updated")
         if not sent or not sent.photo:
             raise RuntimeError("Telegram did not return a photo message")
@@ -151,3 +134,18 @@ def tasks_update(message):
     except Exception as e:
         logging.exception("tasks_update failed")
         bot.reply_to(message,f"❌ {type(e).__name__}: {e}")
+
+@bot.message_handler(commands=["groupid"])
+def get_group_id(message):
+    if message.from_user.id!=ADMIN_ID:
+        return bot.reply_to(message,"❌ ما عندك صلاحية")
+    if message.chat.type not in ["group","supergroup"]:
+        return bot.reply_to(message,"❌ استخدم الأمر داخل الكروب")
+    bot.reply_to(message,f"🆔 Group ID:\n`{message.chat.id}`",parse_mode="Markdown")
+
+@bot.message_handler(commands=["update_tele"])
+def Dive_to_telegram(message):
+    if message.from_user.id!=ADMIN_ID:
+            return bot.reply_to(message,"❌ ما عندك صلاحية")
+    state = load_state()
+    create_topic(state, message)

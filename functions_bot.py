@@ -3,8 +3,32 @@ from googleapiclient.http import MediaIoBaseDownload
 import json
 import io
 import time
+from telebot.apihelper import ApiTelegramException
 from config import*
 from bot_texts import*
+
+
+
+from telebot.apihelper import ApiTelegramException
+
+def safe_api_call(func, *args, **kwargs):
+    max_retries = 5
+    attempts = 0
+    
+    while attempts < max_retries:
+        try:
+            return func(*args, **kwargs)
+        except ApiTelegramException as e:
+            if e.error_code == 429:
+                #telegram tells exactly how many seconds to wait
+                retry_after = int(e.result_json.get("parameters", {}).get("retry_after", 10))
+                logging.warning(f"Rate limited (429). Sleeping for {retry_after + 2} seconds...")
+                time.sleep(retry_after + 2)
+                attempts += 1
+            else:
+                raise e
+                
+    raise Exception("Exceeded max retries for Telegram API call due to persistent 429 limits.")
 
 
 def download_and_send_file(file_id, chat_id_given, message, message_thread_id=None):
@@ -32,13 +56,9 @@ def download_and_send_file(file_id, chat_id_given, message, message_thread_id=No
         if message_thread_id is None:
             bot.send_document(chat_id_given, (file_name, file_stream), timeout=300)
         else:
-            bot.send_document(
-                chat_id=chat_id_given, 
-                document=(file_name, file_stream), 
-                message_thread_id=message_thread_id, 
-                caption=f"📁 `{file_name}`", 
-                parse_mode="Markdown",
-                timeout=300)
+            safe_api_call(bot.send_document, chat_id=chat_id_given, document=(file_name, file_stream), 
+            message_thread_id=message_thread_id, caption=f"📁 `{file_name}`", parse_mode="Markdown", timeout=300)
+            time.sleep(2.0)
     except Exception as e:
         print(f"Failed to send file {file_name}: {e}")
 
@@ -97,8 +117,25 @@ def process_update(json_data):
     except Exception as e:
         logging.error(f"Error handling update in background: {e}")
 
+import time
+from ssl import SSLError
+from googleapiclient.errors import HttpError
 
-def send_to_telegram(folder_ID, topic_id, message):
+def get_drive_subfolders(q_for_Drive):
+    for attempt in range(3):
+        try:
+            return Drive_service.files().list(
+                q=q_for_Drive, 
+                fields="files(id, name)"
+            ).execute()
+        except (SSLError, OSError) as e:
+            if attempt == 2:
+                raise e
+            time.sleep(1)
+    return {}
+            
+def send_to_telegram(folder_ID, topic_id, message, state):
+    state.setdefault("sent_files", [])
     
     quary = f"'{folder_ID}' in parents and trashed = false"
     response = Drive_service.files().list(q = quary, fields ="files(id, name, mimeType, size)").execute()
@@ -112,38 +149,55 @@ def send_to_telegram(folder_ID, topic_id, message):
         mime_type = item['mimeType']
         is_folder = (mime_type==FOLDER_MIME_TYPE)
 
+        if file_id in state["sent_files"]:
+            continue
+
         if  is_folder:
-            send_to_telegram(file_id, topic_id, message) #the power of recursion lol
+            send_to_telegram(file_id, topic_id, message, state) #the power of recursion lol
             continue
 
         if mime_type.startswith("application/vnd.google-apps."):
             continue
         else:
             download_and_send_file(file_id, telegram_ID_course, message, message_thread_id = topic_id)
-            time.sleep(1.2)
+            state["sent_files"].append(file_id)
+            save_state(state)
+            time.sleep(2.0)
 
 def create_topic(state, message):
-    bot.send_message(message.chat.id,"🔄creating new topics...")
+    safe_api_call(bot.send_message, message.chat.id, "🔄creating new topics...")
     q_for_Drive = f"'{Drive_ID_course}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    List_subfolders = Drive_service.files().list(q=q_for_Drive, fields="files(id, name)").execute()
+    List_subfolders = get_drive_subfolders(q_for_Drive)
     
     for subfolder in List_subfolders["files"]:
         subfolder_name = subfolder["name"]
         subfolder_id = subfolder["id"]
         if subfolder_id not in state["topic_map"]:
-            bot.send_message(message.chat.id, f"new subfolder found, creating {subfolder_name} topic...")
-            time.sleep(1.2)
-            new_topic = bot.create_forum_topic(chat_id=telegram_ID_course, name=subfolder_name)
-            state["topic_map"][subfolder_id] = new_topic.message_thread_id #satore the ID in topic_map
-            
-            
-            save_state(state) #get topic ID for dispatching files
+            try:
+                safe_api_call(bot.send_message, message.chat.id, f"new subfolder found, creating {subfolder_name} topic...")
+                new_topic = safe_api_call(bot.create_forum_topic, chat_id=telegram_ID_course, name=subfolder_name)
+                time.sleep(1.2)
+                state["topic_map"][subfolder_id] = new_topic.message_thread_id #satore the ID in topic_map
+                
+                
+                save_state(state) #get topic ID for dispatching files
+
+            except ApiTelegramException as e:
+                            if e.error_code == 400 and "not enough rights" in e.description:
+                                safe_api_call(bot.send_message, message.chat.id, "❌Bot needs Admin permissions")
+                                return  # Stop execution cleanly
+                            raise e
             
         topic_id = state["topic_map"][subfolder_id]
-        bot.send_message(message.chat.id,f"جار إرسال جميع ملفات {subfolder_name}⏬...")
-        time.sleep(1.2)
-        send_to_telegram(subfolder_id,topic_id, message)
+        safe_api_call(bot.send_message, message.chat.id, f"جار إرسال جميع ملفات {subfolder_name}⏬...")
+        send_to_telegram(subfolder_id,topic_id, message, state)
         
         
-    bot.send_message(message.chat.id,"finished...")
-    
+    safe_api_call(bot.send_message, message.chat.id, "finished...")
+
+@bot.message_handler(commands=['reset_topics'])
+def handle_reset(message):
+    state = load_state()
+    state["topic_map"] = {}
+    save_state(state)
+    bot.reply_to(message, "✅ Topic map cleared! Run /update_tele again.")

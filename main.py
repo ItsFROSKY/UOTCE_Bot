@@ -45,7 +45,7 @@ async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "i am alive and new")
+    bot.send_message(message.chat.id, "i am alive 2")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_drive_click(call):

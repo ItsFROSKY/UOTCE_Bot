@@ -7,3 +7,4 @@ python-dotenv
 requests
 Pillow
 upstash-redis
+python-3.11

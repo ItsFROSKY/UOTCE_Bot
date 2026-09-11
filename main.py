@@ -6,6 +6,7 @@ import requests
 import json
 import logging
 from upstash_redis import Redis
+from fastapi import FastAPI, Request, BackgroundTasks
 from PIL import Image
 from config import*
 from bot_texts import*

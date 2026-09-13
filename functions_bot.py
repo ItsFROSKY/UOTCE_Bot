@@ -3,201 +3,271 @@ from googleapiclient.http import MediaIoBaseDownload
 import json
 import io
 import time
+import logging
+from googleapiclient.errors import HttpError
+from ssl import SSLError
 from telebot.apihelper import ApiTelegramException
-from config import*
-from bot_texts import*
+from config import *
+from telebot import types
+
+# from bot_texts import *
+# No shared text constants are currently defined in bot_texts.py.
+
+logger = logging.getLogger("uotce_bot")
 
 
+class TelegramRetryExhausted(RuntimeError):
+    """Raised when Telegram remains rate-limited after bounded retries."""
 
-from telebot.apihelper import ApiTelegramException
 
+# Purpose: Retry Telegram rate limits with a bounded delay without repeating permanent errors.
 def safe_api_call(func, *args, **kwargs):
-    max_retries = 5
-    attempts = 0
-    
-    while attempts < max_retries:
+    # Retry only rate limits; retrying permanent Telegram errors creates duplicate actions.
+    for attempt in range(5):
         try:
             return func(*args, **kwargs)
-        except ApiTelegramException as e:
-            if e.error_code == 429:
-                #telegram tells exactly how many seconds to wait
-                retry_after = int(e.result_json.get("parameters", {}).get("retry_after", 10))
-                logging.warning(f"Rate limited (429). Sleeping for {retry_after + 2} seconds...")
-                time.sleep(retry_after + 2)
-                attempts += 1
-            else:
-                raise e
-                
-    raise Exception("Exceeded max retries for Telegram API call due to persistent 429 limits.")
+        except ApiTelegramException as exc:
+            if exc.error_code != 429:
+                raise
+            retry_after = int(
+                exc.result_json.get("parameters", {}).get("retry_after", 10)
+            )
+            delay = min(retry_after + 2, 60)
+            logger.warning(
+                "Telegram rate limit; retry=%s delay=%ss", attempt + 1, delay
+            )
+            time.sleep(delay)
+    raise TelegramRetryExhausted("Telegram rate limit retry budget exhausted")
 
 
+# Purpose: Enforce a size limit before downloading a Drive file into server memory.
 def download_and_send_file(file_id, chat_id_given, message, message_thread_id=None):
-    #fetch file name to Telegram so that it knows what to name the file
-    file_metadata = Drive_service.files().get(fileId=file_id, fields="name").execute()
+    # Check the remote size before allocating memory for a potentially huge download.
+    file_metadata = (
+        Drive_service.files()
+        .get(
+            fileId=file_id,
+            fields="name,size,mimeType",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
     file_name = file_metadata.get("name", "downloaded_file")
+    file_size = int(file_metadata.get("size") or 0)
+    if file_size > MAX_FILE_SIZE:
+        raise ValueError(f"File exceeds configured limit: {MAX_FILE_SIZE} bytes")
 
-    #download binary of file
-    request = Drive_service.files().get_media(fileId=file_id)
-    
-    # stream the bytes into an in-memory buffer
+    request = Drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
     file_stream = io.BytesIO()
     downloader = MediaIoBaseDownload(file_stream, request)
-    
     done = False
-    #the loop to downlaod all chunks
-        
     while not done:
-        status, done = downloader.next_chunk()
-
+        _, done = downloader.next_chunk()
+        if file_stream.tell() > MAX_FILE_SIZE:
+            raise ValueError("Downloaded file exceeded configured limit")
     file_stream.seek(0)
 
-    #send the file :)
     try:
         if message_thread_id is None:
-            bot.send_document(chat_id_given, (file_name, file_stream), timeout=300)
+            safe_api_call(
+                bot.send_document, chat_id_given, (file_name, file_stream), timeout=120
+            )
         else:
-            safe_api_call(bot.send_document, chat_id=chat_id_given, document=(file_name, file_stream), 
-            message_thread_id=message_thread_id, caption=f"📁 `{file_name}`", parse_mode="Markdown", timeout=300)
-            time.sleep(2.0)
-    except Exception as e:
-        print(f"Failed to send file {file_name}: {e}")
+            safe_api_call(
+                bot.send_document,
+                chat_id=chat_id_given,
+                document=(file_name, file_stream),
+                message_thread_id=message_thread_id,
+                caption=f"📁 {file_name}",
+                timeout=120,
+            )
+    except Exception:
+        logger.exception("Failed to send file file_id=%s", file_id)
+        raise
 
 
-def Google_menu(Folder_ID, bot, drive_service):
-    
-    quary = f"'{Folder_ID}' in parents and trashed = false"
-    response = drive_service.files().list(q = quary, fields ="files(id, name, mimeType, shortcutDetails, size)").execute()
+# Purpose: Build a deterministic, compact Telegram menu for a Drive folder.
+def Google_menu(folder_id, drive_service):
+    # Use explicit fields and ordering to make the menu deterministic and cheaper.
+    query = f"'{folder_id}' in parents and trashed = false"
+    response = (
+        drive_service.files()
+        .list(
+            q=query,
+            pageSize=100,
+            orderBy="folder,name",
+            fields="files(id,name,mimeType,shortcutDetails,size),nextPageToken",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
 
-    #this is the list of file dictionaries
-    items = response.get('files', [])
-    FOLDER_MIME_TYPE = "application/vnd.google-apps.folder" #this way yk if its a folder or file
-    SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
-    inline_keyboard_menu = InlineKeyboardMarkup(row_width = 8)
-    for item in items:
-        file_name = item['name']
-        file_id = item['id']
-        mime_type = item['mimeType']
-        is_folder = (mime_type==FOLDER_MIME_TYPE)
-        
-        if mime_type == SHORTCUT_MIME_TYPE:
-            shortcut_details = item.get('shortcutDetails', {})
-            file_id = shortcut_details.get('targetId', file_id) # Use the real target ID
-            if shortcut_details.get('targetMimeType') == FOLDER_MIME_TYPE:
-                is_folder = True
-
-
-
-        if  is_folder:
-            button = InlineKeyboardButton(text=f"📁{file_name}", callback_data=f"dir:{file_id}")
-            inline_keyboard_menu.add(button)
-        else:
-            button = InlineKeyboardButton(text=f"📄{file_name}", callback_data=f"file:{file_id}")
-            inline_keyboard_menu.add(button)
-        
+    inline_keyboard_menu = InlineKeyboardMarkup(row_width=2)
+    folder_mime = "application/vnd.google-apps.folder"
+    shortcut_mime = "application/vnd.google-apps.shortcut"
+    for item in response.get("files", []):
+        file_name = item.get("name", "Unnamed")[:55]
+        file_id = item["id"]
+        mime_type = item.get("mimeType", "")
+        is_folder = mime_type == folder_mime
+        if mime_type == shortcut_mime:
+            shortcut = item.get("shortcutDetails", {})
+            file_id = shortcut.get("targetId", file_id)
+            is_folder = shortcut.get("targetMimeType") == folder_mime
+        prefix = "📁" if is_folder else "📄"
+        action = "dir" if is_folder else "file"
+        inline_keyboard_menu.add(
+            InlineKeyboardButton(
+                text=f"{prefix} {file_name}", callback_data=f"{action}:{file_id}"
+            )
+        )
     return inline_keyboard_menu
 
 
-
+# Purpose: Load synchronization state safely even when Redis contains invalid JSON.
 def load_state():
+    # Recover from malformed Redis data instead of crashing every synchronization attempt.
     raw_data = redis.get(REDIS_KEY_DRIVE)
-    if raw_data:
-        return json.loads(raw_data)
-    return {"page_token": None, "topic_map": {}}
+    if not raw_data:
+        return {"version": 1, "topic_map": {}, "sent_files": []}
+    try:
+        state = json.loads(raw_data)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.exception("Invalid synchronization state in Redis")
+        return {"version": 1, "topic_map": {}, "sent_files": []}
+    state.setdefault("version", 1)
+    state.setdefault("topic_map", {})
+    state.setdefault("sent_files", [])
+    return state
 
+
+# Purpose: Persist the current synchronization state in a compact Redis record.
 def save_state(state):
-    redis.set(REDIS_KEY_DRIVE, json.dumps(state))
+    # Store a compact JSON state; a worker lock should protect concurrent updates.
+    redis.set(REDIS_KEY_DRIVE, json.dumps(state, separators=(",", ":")))
 
-LIMIT_50MB = 52428800
 
+# Purpose: Convert a raw Telegram payload into an update and dispatch it to handlers.
 def process_update(json_data):
     try:
         update = types.Update.de_json(json_data)
         if update is not None:
             bot.process_new_updates([update])
-    except Exception as e:
-        logging.error(f"Error handling update in background: {e}")
+    except Exception:
+        logger.exception("Error handling update")
 
-import time
-from ssl import SSLError
-from googleapiclient.errors import HttpError
 
-def get_drive_subfolders(q_for_Drive):
+# Purpose: Read Drive folders with limited retries for transient network failures.
+def get_drive_subfolders(query):
     for attempt in range(3):
         try:
-            return Drive_service.files().list(
-                q=q_for_Drive, 
-                fields="files(id, name)"
-            ).execute()
-        except (SSLError, OSError) as e:
+            return (
+                Drive_service.files()
+                .list(
+                    q=query,
+                    pageSize=100,
+                    orderBy="name",
+                    fields="files(id,name),nextPageToken",
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                )
+                .execute()
+            )
+        except (SSLError, OSError, HttpError):
             if attempt == 2:
-                raise e
-            time.sleep(1)
-    return {}
-            
-def send_to_telegram(folder_ID, topic_id, message, state):
+                raise
+            time.sleep(2**attempt)
+    return {"files": []}
+
+
+# Purpose: Send eligible Drive files to one Telegram topic while tracking sent IDs.
+def send_to_telegram(folder_id, topic_id, message, state):
     state.setdefault("sent_files", [])
-    
-    quary = f"'{folder_ID}' in parents and trashed = false"
-    response = Drive_service.files().list(q = quary, fields ="files(id, name, mimeType, size)").execute()
+    query = f"'{folder_id}' in parents and trashed = false"
+    response = (
+        Drive_service.files()
+        .list(
+            q=query,
+            pageSize=100,
+            orderBy="folder,name",
+            fields="files(id,name,mimeType,size),nextPageToken",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+    )
 
-    #this is the list of file dictionaries
-    items = response.get('files', [])
-    FOLDER_MIME_TYPE = "application/vnd.google-apps.folder" #this way yk if its a folder or file
-    for item in items:
-        file_name = item['name']
-        file_id = item['id']
-        mime_type = item['mimeType']
-        is_folder = (mime_type==FOLDER_MIME_TYPE)
-
+    for item in response.get("files", []):
+        file_id = item["id"]
+        mime_type = item.get("mimeType", "")
         if file_id in state["sent_files"]:
             continue
-
-        if  is_folder:
-            send_to_telegram(file_id, topic_id, message, state) #the power of recursion lol
+        if mime_type == "application/vnd.google-apps.folder":
+            send_to_telegram(file_id, topic_id, message, state)
             continue
-
         if mime_type.startswith("application/vnd.google-apps."):
             continue
-        else:
-            download_and_send_file(file_id, telegram_ID_course, message, message_thread_id = topic_id)
-            state["sent_files"].append(file_id)
-            save_state(state)
-            time.sleep(2.0)
+        download_and_send_file(
+            file_id, telegram_ID_course, message, message_thread_id=topic_id
+        )
+        state["sent_files"].append(file_id)
+        save_state(state)
+        time.sleep(2.0)
 
+
+# Purpose: Create missing Telegram topics and synchronize their Drive folder contents.
 def create_topic(state, message):
-    safe_api_call(bot.send_message, message.chat.id, "🔄creating new topics...")
-    q_for_Drive = f"'{Drive_ID_course}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    List_subfolders = get_drive_subfolders(q_for_Drive)
-    
-    for subfolder in List_subfolders["files"]:
+    safe_api_call(bot.send_message, message.chat.id, "🔄 creating new topics...")
+    query = f"'{Drive_ID_course}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    folders = get_drive_subfolders(query)
+
+    for subfolder in folders.get("files", []):
         subfolder_name = subfolder["name"]
         subfolder_id = subfolder["id"]
         if subfolder_id not in state["topic_map"]:
             try:
-                safe_api_call(bot.send_message, message.chat.id, f"new subfolder found, creating {subfolder_name} topic...")
-                new_topic = safe_api_call(bot.create_forum_topic, chat_id=telegram_ID_course, name=subfolder_name)
-                time.sleep(1.2)
-                state["topic_map"][subfolder_id] = new_topic.message_thread_id #satore the ID in topic_map
-                
-                
-                save_state(state) #get topic ID for dispatching files
+                safe_api_call(
+                    bot.send_message,
+                    message.chat.id,
+                    f"Creating topic: {subfolder_name}",
+                )
+                new_topic = safe_api_call(
+                    bot.create_forum_topic,
+                    chat_id=telegram_ID_course,
+                    name=subfolder_name[:128],
+                )
+                state["topic_map"][subfolder_id] = new_topic.message_thread_id
+                save_state(state)
+            except ApiTelegramException as exc:
+                if (
+                    exc.error_code == 400
+                    and "not enough rights" in exc.description.lower()
+                ):
+                    safe_api_call(
+                        bot.send_message,
+                        message.chat.id,
+                        "❌ Bot needs admin permissions",
+                    )
+                    return
+                raise
 
-            except ApiTelegramException as e:
-                            if e.error_code == 400 and "not enough rights" in e.description:
-                                safe_api_call(bot.send_message, message.chat.id, "❌Bot needs Admin permissions")
-                                return  # Stop execution cleanly
-                            raise e
-            
         topic_id = state["topic_map"][subfolder_id]
-        safe_api_call(bot.send_message, message.chat.id, f"جار إرسال جميع ملفات {subfolder_name}⏬...")
-        send_to_telegram(subfolder_id,topic_id, message, state)
-        
-        
+        safe_api_call(
+            bot.send_message, message.chat.id, f"جار إرسال ملفات {subfolder_name} ⏬"
+        )
+        send_to_telegram(subfolder_id, topic_id, message, state)
+
     safe_api_call(bot.send_message, message.chat.id, "finished...")
 
-@bot.message_handler(commands=['reset_topics'])
+
+@bot.message_handler(commands=["reset_topics"])
+# Purpose: Let only the administrator clear topic mappings without deleting Telegram topics.
 def handle_reset(message):
+    # Restrict state-destructive commands to the configured administrator.
+    if message.from_user.id != ADMIN_ID:
+        return bot.reply_to(message, "❌ هذا الأمر متاح للمدير فقط")
     state = load_state()
     state["topic_map"] = {}
     save_state(state)
-    bot.reply_to(message, "✅ Topic map cleared! Run /update_tele again.")
+    bot.reply_to(message, "✅ Topic map cleared; Telegram topics were not deleted.")

@@ -1,37 +1,54 @@
-from upstash_redis import Redis
-from dotenv import load_dotenv
+import base64
 import json
 import logging
 import os
-import base64
+
+from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from telebot import TeleBot, types, apihelper
-from fastapi import FastAPI, Request, BackgroundTasks
-
-
+from telebot import TeleBot, apihelper
+from upstash_redis import Redis
 
 load_dotenv(override=True)
 
+#load .env only  for local development without overriding platform secrets
+load_dotenv()
 
-Google_Credentials_bot = json.loads(base64.b64decode(os.environ["Google_Credentials_bot"]).decode())
-Drive_ID = os.environ.get("Drive_ID")
-creds = Credentials.from_service_account_info(Google_Credentials_bot, scopes=["https://www.googleapis.com/auth/drive"])
-Drive_service = build("drive", "v3", credentials=creds)
-tasks_cache_File_ID = os.environ["tasks_cache_File_ID"]
-TOKEN = os.environ.get("BOT_TOKEN") or "" #the or exists to avoid none returns that will crash runtime for bot
-if not TOKEN:
-    logging.error("BOT_TOKEN environment variable is missing")
-    
+
+# Purpose: Fail fast when a required secret or deployment setting is missing.
+def required_env(name: str) -> str:
+    """Return a required environment variable or fail with a safe message."""
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+# Decode service-account credentials from an environment variable, never from Git.
+try:
+    credentials_json = json.loads(
+        base64.b64decode(required_env("Google_Credentials_bot")).decode("utf-8")
+    )
+except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+    raise RuntimeError("Google_Credentials_bot is not valid Base64 JSON") from exc
+
+creds = Credentials.from_service_account_info(
+    credentials_json,
+    scopes=["https://www.googleapis.com/auth/drive"],
+)
+Drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+redis = Redis(
+    url=required_env("KV_REST_API_URL"),
+    token=required_env("KV_REST_API_TOKEN"),
+)
+
+# Configure Telegram network timeouts centrally instead of scattering magic values.
+apihelper.CONNECT_TIMEOUT = int(os.getenv("TELEGRAM_CONNECT_TIMEOUT", "30"))
+apihelper.READ_TIMEOUT = int(os.getenv("TELEGRAM_READ_TIMEOUT", "120"))
+
 bot = TeleBot(TOKEN, threaded=False)
 
-
-
-redis = Redis(url=os.environ["KV_REST_API_URL"], token=os.environ["KV_REST_API_TOKEN"])
-Drive_ID_course = "1RAqZ-7lGj8LpfyL8cseck4rdon4h7H4y"
-telegram_ID_course = -1004441628950
-REDIS_KEY_DRIVE = f"state:{Drive_ID_course}"
-
-# Set long connection and read timeouts (e.g., 60s connect, 300s read for large files)
-apihelper.CONNECT_TIMEOUT = 60
-apihelper.READ_TIMEOUT = 300
+REDIS_KEY_DRIVE = f"state:{Drive_ID}"
+REDIS_UPDATE_PREFIX = "telegram:update:"
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_BYTES", str(50 * 1024 * 1024)))
+JOB_LOCK_TTL = int(os.getenv("JOB_LOCK_TTL_SECONDS", "900"))

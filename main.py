@@ -45,7 +45,7 @@ async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "i am alive 2")
+    bot.send_message(message.chat.id, "AYO")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_drive_click(call):
@@ -75,14 +75,12 @@ def source_text_end(message):
 
 ADMIN_ID=int(os.getenv("ADMIN_ID","0"))
 TARGET_URL="https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca"
-TASKS_FILE="tasks_file_id.txt"
+TASKS_FILE_ID = os.getenv("TASKS_FILE_ID")
+TASKS_FILE_ID_KEY = "tasks_file_id"
 @bot.message_handler(commands=["tasks"])
 def tasks(message):
     try:
-        if not os.path.exists(TASKS_FILE):
-            return bot.reply_to(message,"أستخدم /Tasks_update أولاً❌ ")
-        with open(TASKS_FILE,"r") as f:
-            file_id=f.read().strip()
+        file_id = redis.get(TASKS_FILE_ID_KEY) or TASKS_FILE_ID
         if not file_id:
             return bot.reply_to(message,"أستخدم /Tasks_update أولاً❌ ")
         bot.send_photo(message.chat.id,file_id)
@@ -130,8 +128,7 @@ def tasks_update(message):
         sent=bot.send_photo(message.chat.id,io.BytesIO(image_bytes),caption="✅ Updated")
         if not sent or not sent.photo:
             raise RuntimeError("Telegram did not return a photo message")
-        with open(TASKS_FILE,"w") as f:
-            f.write(sent.photo[-1].file_id)
+        redis.set(TASKS_FILE_ID_KEY, sent.photo[-1].file_id)
     except Exception as e:
         logging.exception("tasks_update failed")
         bot.reply_to(message,f"❌ {type(e).__name__}: {e}")

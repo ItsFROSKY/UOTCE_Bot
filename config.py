@@ -28,8 +28,8 @@ bot = TeleBot(TOKEN, threaded=False)
 
 
 redis = Redis(url=os.environ["KV_REST_API_URL"], token=os.environ["KV_REST_API_TOKEN"])
-Drive_ID_course = "1RAqZ-7lGj8LpfyL8cseck4rdon4h7H4y"
-telegram_ID_course = -1004441628950
+Drive_ID_course = "1rerWXAD3BpbnMjiaXEUPvD8eRlK46QFS"
+telegram_ID_course = -1003344139710
 REDIS_KEY_DRIVE = f"state:{Drive_ID_course}"
 
 # Set long connection and read timeouts (e.g., 60s connect, 300s read for large files)

@@ -1,8 +1,9 @@
 #UOTCE Tele Bot
 
-the bot is deployed on vercel, with an option for local development support via ssh.
-it uses cronPing now to achive near zero cold-time keeping the bot fast at all time
+ayo waddup
 
+the bot is deployed on vercel, with an option for local development support via ssh.
+it uses cronPing, thus you get near zero cold-time keeping the bot fast all the time
 thus you'll need the following
 ## Local Development Setup🛠️
 

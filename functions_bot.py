@@ -199,5 +199,6 @@ def create_topic(state, message):
 def handle_reset(message):
     state = load_state()
     state["topic_map"] = {}
+    state["sent_files"] = []
     save_state(state)
     bot.reply_to(message, "✅ Topic map cleared! Run /update_tele again.")

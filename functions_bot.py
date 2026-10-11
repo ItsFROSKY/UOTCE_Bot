@@ -165,7 +165,8 @@ def send_to_telegram(folder_ID, topic_id, message, state):
             time.sleep(2.0)
 
 def create_topic(state, message):
-    safe_api_call(bot.send_message, message.chat.id, "🔄creating new topics...")
+    safe_api_call(bot.send_message, message.chat.id, "بدأ")
+    Number_sneds = 0
     q_for_Drive = f"'{Drive_ID_course}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     List_subfolders = get_drive_subfolders(q_for_Drive)
     
@@ -189,15 +190,14 @@ def create_topic(state, message):
                             raise e
             
         topic_id = state["topic_map"][subfolder_id]
-        safe_api_call(bot.send_message, message.chat.id, f"جار إرسال جميع ملفات {subfolder_name}⏬...")
         send_to_telegram(subfolder_id,topic_id, message, state)
-        
-        
-    safe_api_call(bot.send_message, message.chat.id, "finished...")
+        Number_sneds += 1
+    safe_api_call(bot.send_message, message.chat.id, f"تم إرسال {Number_sneds}⏬...")
 
 @bot.message_handler(commands=['reset_topics'])
 def handle_reset(message):
     state = load_state()
     state["topic_map"] = {}
+    state["sent_files"] = []
     save_state(state)
     bot.reply_to(message, "✅ Topic map cleared! Run /update_tele again.")

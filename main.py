@@ -45,7 +45,7 @@ async def webhook_handler(request: Request, background_tasks: BackgroundTasks):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.send_message(message.chat.id, "AYO")
+    bot.send_message(message.chat.id, "aha")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_drive_click(call):
@@ -73,7 +73,7 @@ def source_text_end(message):
     bot.send_message(message.chat.id, "github.com/ItsFROSKY/UOTCE_Bot/")
 
 
-ADMIN_ID=int(os.getenv("ADMIN_ID","0"))
+ADMIN_ID= {1966119616, 1259549184}
 TARGET_URL="https://pouncing-donut-8de.notion.site/9fc6e320cbbd82cca21b81bcd086ac05?v=3366e320cbbd8082b0db000c05774ca"
 TASKS_FILE_ID = os.getenv("TASKS_FILE_ID")
 TASKS_FILE_ID_KEY = "tasks_file_id"
@@ -94,7 +94,7 @@ def tasks(message):
 @bot.message_handler(commands=["tasks_update"])
 def tasks_update(message):
     bot.send_message(message.chat.id,"🔄 Updating...")
-    if message.from_user.id!=ADMIN_ID:
+    if message.from_user.id not in ADMIN_ID:
         return bot.reply_to(message,"❌ ما عندك صلاحية")
     try:
         token=os.getenv("BROWSERLESS_TOKEN")
@@ -135,7 +135,7 @@ def tasks_update(message):
 
 @bot.message_handler(commands=["groupid"])
 def get_group_id(message):
-    if message.from_user.id!=ADMIN_ID:
+    if message.from_user.id not in ADMIN_ID:
         return bot.reply_to(message,"❌ ما عندك صلاحية")
     if message.chat.type not in ["group","supergroup"]:
         return bot.reply_to(message,"❌ استخدم الأمر داخل الكروب")
@@ -143,7 +143,7 @@ def get_group_id(message):
 
 @bot.message_handler(commands=["update_tele"])
 def Dive_to_telegram(message):
-    if message.from_user.id!=ADMIN_ID:
+    if message.from_user.id not in ADMIN_ID:
             return bot.reply_to(message,"❌ ما عندك صلاحية")
     state = load_state()
     create_topic(state, message)

@@ -14,7 +14,9 @@ from fastapi import FastAPI, Request, BackgroundTasks
 load_dotenv(override=True)
 
 
-Google_Credentials_bot = json.loads(base64.b64decode(os.environ["Google_Credentials_bot"]).decode())
+_google_raw = os.environ["Google_Credentials_bot"].strip()
+# works with the json pasted as is, or base64 of it like before
+Google_Credentials_bot = json.loads(_google_raw if _google_raw.startswith("{") else base64.b64decode(_google_raw).decode())
 Drive_ID = os.environ.get("Drive_ID")
 creds = Credentials.from_service_account_info(Google_Credentials_bot, scopes=["https://www.googleapis.com/auth/drive"])
 Drive_service = build("drive", "v3", credentials=creds)
@@ -35,3 +37,15 @@ REDIS_KEY_DRIVE = f"state:{Drive_ID_course}"
 # Set long connection and read timeouts (e.g., 60s connect, 300s read for large files)
 apihelper.CONNECT_TIMEOUT = 60
 apihelper.READ_TIMEOUT = 300
+
+ADMIN_ID = {int(x) for x in os.environ.get("ADMIN_IDS", "1966119616,1259549184").split(",") if x.strip()}
+
+# same random string you give setWebhook(secret_token=...), telegram sends it back with every update
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+
+# for /api/cron/*
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+# mini app url
+_vercel_host = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
+WEBAPP_URL = os.environ.get("WEBAPP_URL") or (f"https://{_vercel_host}/app/index.html" if _vercel_host else "")

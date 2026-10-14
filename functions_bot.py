@@ -31,36 +31,68 @@ def safe_api_call(func, *args, **kwargs):
     raise Exception("Exceeded max retries for Telegram API call due to persistent 429 limits.")
 
 
-def download_and_send_file(file_id, chat_id_given, message, message_thread_id=None):
-    #fetch file name to Telegram so that it knows what to name the file
-    file_metadata = Drive_service.files().get(fileId=file_id, fields="name").execute()
-    file_name = file_metadata.get("name", "downloaded_file")
+TG_FILE_KEY = "tgfile:{id}:{modified}"
 
-    #download binary of file
-    request = Drive_service.files().get_media(fileId=file_id)
-    
-    # stream the bytes into an in-memory buffer
+
+def send_drive_file(chat_id, file_id, message_thread_id=None, caption=None):
+    # first time: download from drive + upload to telegram (slow)
+    # then we save telegram's file_id in redis so next time its instant
+    # returns 'sent' or 'link' (google docs / files over 50MB get a link)
+    meta = Drive_service.files().get(
+        fileId=file_id, fields="name, size, mimeType, modifiedTime, webViewLink",
+        supportsAllDrives=True).execute()
+    file_name = meta.get("name", "downloaded_file")
+    size = int(meta.get("size") or 0)
+    extra = {"message_thread_id": message_thread_id} if message_thread_id else {}
+
+    # google docs have no file to download and telegram refuses over 50MB
+    if meta.get("mimeType", "").startswith("application/vnd.google-apps.") or size > LIMIT_50MB:
+        link = meta.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
+        safe_api_call(bot.send_message, chat_id, f"📎 {file_name}\nالملف كبير على التليكرام، افتحه من هنا:\n{link}", **extra)
+        return "link"
+
+    cache_key = TG_FILE_KEY.format(id=file_id, modified=meta.get("modifiedTime", ""))
+    cached = None
+    try:
+        cached = redis.get(cache_key)
+    except Exception:
+        logging.exception("file cache read failed")
+    if cached:
+        try:
+            safe_api_call(bot.send_document, chat_id, cached, caption=caption, **extra)
+            return "sent"
+        except ApiTelegramException:
+            logging.warning("cached telegram file_id rejected, re-uploading")
+
+    #download binary of file into memory
+    request = Drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
     file_stream = io.BytesIO()
     downloader = MediaIoBaseDownload(file_stream, request)
-    
     done = False
-    #the loop to downlaod all chunks
-        
     while not done:
         status, done = downloader.next_chunk()
-
     file_stream.seek(0)
 
-    #send the file :)
+    sent = safe_api_call(bot.send_document, chat_id, (file_name, file_stream),
+                         caption=caption, timeout=300, **extra)
+    try:
+        if sent and sent.document:
+            redis.set(cache_key, sent.document.file_id, ex=180 * 86400)
+    except Exception:
+        logging.exception("file cache write failed")
+    return "sent"
+
+
+def download_and_send_file(file_id, chat_id_given, message, message_thread_id=None):
     try:
         if message_thread_id is None:
-            bot.send_document(chat_id_given, (file_name, file_stream), timeout=300)
+            send_drive_file(chat_id_given, file_id)
         else:
-            safe_api_call(bot.send_document, chat_id=chat_id_given, document=(file_name, file_stream), 
-            message_thread_id=message_thread_id, caption=f"📁 `{file_name}`", parse_mode="Markdown", timeout=300)
+            send_drive_file(chat_id_given, file_id, message_thread_id=message_thread_id,
+                            caption=None)
             time.sleep(2.0)
     except Exception as e:
-        print(f"Failed to send file {file_name}: {e}")
+        logging.exception(f"Failed to send file {file_id}: {e}")
 
 
 def Google_menu(Folder_ID, bot, drive_service):
@@ -193,11 +225,3 @@ def create_topic(state, message):
         send_to_telegram(subfolder_id,topic_id, message, state)
         Number_sneds += 1
     safe_api_call(bot.send_message, message.chat.id, f"تم إرسال {Number_sneds}⏬...")
-
-@bot.message_handler(commands=['reset_topics'])
-def handle_reset(message):
-    state = load_state()
-    state["topic_map"] = {}
-    state["sent_files"] = []
-    save_state(state)
-    bot.reply_to(message, "✅ Topic map cleared! Run /update_tele again.")
